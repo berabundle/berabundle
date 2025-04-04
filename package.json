@@ -1,0 +1,22 @@
+{
+  "name": "berabundle",
+  "version": "1.0.0",
+  "description": "BeraBundle - Bundle creator for claims, boosts, and swaps on Berachain",
+  "main": "config.js",
+  "scripts": {
+    "start-ui": "cd reactui && npm start"
+  },
+  "keywords": [
+    "berachain",
+    "rewards",
+    "blockchain",
+    "ethereum",
+    "defi"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.7",
+    "ethers": "^5.7.2"
+  }
+}

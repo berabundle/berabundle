@@ -1,0 +1,202 @@
+.cli-terminal {
+  width: 100%;
+  height: 100%;
+  background-color: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  font-family: 'Courier New', monospace;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid #444;
+}
+
+.cli-header {
+  background-color: #333;
+  color: #f0f0f0;
+  padding: 8px 12px;
+  border-bottom: 1px solid #555;
+  font-weight: bold;
+}
+
+.cli-header-commands {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.cli-header-main {
+  margin-bottom: 5px;
+}
+
+.cli-header-selection {
+  display: flex;
+  align-items: center;
+  padding-left: 20px;
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.cli-action {
+  color: #999;
+  margin-right: 8px;
+}
+
+.cli-prompt {
+  color: #32cd32; /* lime green */
+  margin-right: 8px;
+}
+
+.cli-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+  color: #f0f0f0;
+}
+
+
+.cli-command-option {
+  margin-left: 8px;
+  margin-right: 8px;
+  cursor: pointer;
+  color: #32cd32; /* Green for tokens */
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  transition: color 0.2s;
+}
+
+.cli-command-option:hover {
+  color: #5dff5d;
+}
+
+.cli-table {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+/* Table Header */
+.cli-table-header {
+  display: flex;
+  border-bottom: 1px solid #666;
+  padding: 6px 0;
+  color: #32cd32;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.cli-header-cell {
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.cli-header-cell:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.cli-header-cell.token-symbol {
+  flex: 1;
+  min-width: 120px;
+  text-align: left;
+}
+
+.cli-header-cell.token-balance {
+  flex: 1;
+  text-align: right;
+}
+
+.cli-header-cell.token-price {
+  flex: 1;
+  text-align: right;
+}
+
+.cli-header-cell.token-value {
+  flex: 1;
+  text-align: right;
+}
+
+/* Table Rows */
+.cli-row {
+  display: flex;
+  border-bottom: 1px dotted #444;
+  padding: 6px 0;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.cli-row:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.cli-row.selected {
+  background-color: rgba(50, 205, 50, 0.1);
+}
+
+.cli-row.native-token {
+  color: #32cd32;
+}
+
+.cli-cell {
+  padding: 2px 8px;
+}
+
+.cli-cell.token-symbol {
+  flex: 1;
+  min-width: 120px;
+  text-align: left;
+}
+
+.cli-cell.token-balance {
+  flex: 1;
+  text-align: right;
+}
+
+.cli-cell.token-price {
+  flex: 1;
+  text-align: right;
+}
+
+.cli-cell.token-value {
+  flex: 1;
+  text-align: right;
+}
+
+.cli-summary {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #444;
+}
+
+.cli-summary-line {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.cli-summary-label {
+  color: #aaa;
+}
+
+.cli-summary-value {
+  font-weight: bold;
+}
+
+.cli-loader {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(50, 205, 50, 0.2);
+  border-radius: 50%;
+  border-top-color: #32cd32;
+  animation: cli-spin 1s linear infinite;
+  margin-top: 10px;
+}
+
+.cli-error {
+  color: #ff6b6b;
+}
+
+@keyframes cli-spin {
+  to { transform: rotate(360deg); }
+}
