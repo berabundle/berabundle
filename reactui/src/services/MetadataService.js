@@ -1,20 +1,16 @@
 /**
  * MetadataService.js - Service for fetching and managing metadata for BeraBundle React UI
  * 
- * This service handles fetching metadata from external sources:
- * - GitHub tokens, vaults, and validators lists
- * - OogaBooga token list
+ * This service handles fetching metadata from the backend API:
+ * - GitHub tokens (approved tokens)
+ * - OogaBooga tokens (tokens with paths the API can fetch)
+ * - Vaults and validators lists
  * 
  * It stores each dataset separately in localStorage with timestamps.
  */
 
-import tokenBridge from './TokenBridge';
+import apiClient from './ApiClient';
 import { ethers } from 'ethers';
-
-// GitHub repositories and files
-const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com';
-const METADATA_REPO = 'berachain/metadata';
-const METADATA_BRANCH = 'main';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -36,10 +32,31 @@ class MetadataService {
 
   /**
    * Initialize the metadata service
+   * @param {Object} options - Initialization options
+   * @param {string} [options.apiKey] - OogaBooga API key
+   * @returns {boolean} Whether initialization was successful
    */
-  initialize() {
-    this.initialized = true;
-    return this.initialized;
+  initialize(options = {}) {
+    try {
+      if (options.apiKey) {
+        // Initialize the API client with the API key
+        apiClient.initialize({ apiKey: options.apiKey });
+      }
+      
+      this.initialized = true;
+      return this.initialized;
+    } catch (error) {
+      console.error("Error initializing metadata service:", error);
+      return false;
+    }
+  }
+  
+  /**
+   * Check if the service is initialized
+   * @returns {boolean} Whether the service is initialized
+   */
+  isInitialized() {
+    return this.initialized && apiClient.isInitialized();
   }
 
   /**
@@ -77,39 +94,27 @@ class MetadataService {
   }
 
   /**
-   * Fetch content from a GitHub repository
-   * @param {string} path - Path to the file in the repository
-   * @returns {Promise<any>} Response data 
-   */
-  async fetchFromGitHub(path) {
-    const url = `${GITHUB_RAW_BASE}/${METADATA_REPO}/${METADATA_BRANCH}/${path}`;
-    
-    try {
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`GitHub fetch failed: ${response.status} ${response.statusText}`);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      console.error(`Error fetching from GitHub (${path}):`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Fetch GitHub tokens list
+   * Fetch GitHub tokens list (approved tokens) from backend
    * @returns {Promise<Object>} Result object with tokens data
    */
   async fetchGitHubTokens() {
     try {
-      const tokens = await this.fetchFromGitHub('src/tokens/mainnet.json');
+      if (!this.isInitialized()) {
+        throw new Error("MetadataService not initialized with API key");
+      }
       
-      // Create metadata object - GitHub tokens are already in array format
+      // Get GitHub tokens (approved tokens) from backend
+      console.log("Fetching GitHub tokens from backend API");
+      const result = await apiClient.getTokenList({ source: 'github' });
+      
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to fetch GitHub tokens from backend");
+      }
+      
+      // Format the response
       const metadata = {
-        data: tokens,
-        count: tokens.length,
+        data: result.tokens,
+        count: result.count,
         timestamp: Date.now(),
         source: "github"
       };
@@ -123,62 +128,38 @@ class MetadataService {
         count: metadata.count
       };
     } catch (error) {
-      console.error("Error fetching tokens from GitHub:", error);
+      console.error("Error fetching GitHub tokens:", error);
       return {
         success: false,
-        error: error.message || "Failed to fetch token data from GitHub"
+        error: error.message || "Failed to fetch GitHub token data"
       };
     }
   }
 
   /**
-   * Fetch vaults list from GitHub
+   * Fetch vaults list from backend
    * @returns {Promise<Object>} Result object with vaults data
    */
   async fetchVaults() {
     try {
-      const vaultsData = await this.fetchFromGitHub('src/vaults/mainnet.json');
-      
-      // Process vaults data - extract just the vaults array
-      let processedVaults = [];
-      
-      if (vaultsData && vaultsData.vaults && Array.isArray(vaultsData.vaults)) {
-        console.log(`Found ${vaultsData.vaults.length} vaults in GitHub data`);
-        
-        // Extract protocols for mapping
-        const protocols = {};
-        if (vaultsData.protocols && Array.isArray(vaultsData.protocols)) {
-          vaultsData.protocols.forEach(protocol => {
-            if (protocol.name) {
-              protocols[protocol.name] = protocol;
-            }
-          });
-          console.log(`Loaded ${Object.keys(protocols).length} protocols from GitHub data`);
-        }
-        
-        // Process each vault and add protocol information
-        processedVaults = vaultsData.vaults.map(vault => {
-          // Get the protocol data if available
-          const protocolData = vault.protocol && protocols[vault.protocol] ? protocols[vault.protocol] : null;
-          
-          return {
-            ...vault,
-            // Add protocol details if available
-            protocolLogo: protocolData ? protocolData.logoURI : null,
-            protocolUrl: protocolData ? protocolData.url : null,
-            protocolDescription: protocolData ? protocolData.description : null
-          };
-        });
-      } else {
-        console.warn("Unexpected vaults data format from GitHub");
+      if (!this.isInitialized()) {
+        throw new Error("MetadataService not initialized with API key");
       }
       
-      // Create metadata object with processed vaults
+      // Get vaults from backend
+      console.log("Fetching vaults from backend API");
+      const result = await apiClient.get('/vaults/list');
+      
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to fetch vaults from backend");
+      }
+      
+      // Format the response
       const metadata = {
-        data: processedVaults,
-        count: processedVaults.length,
+        data: result.vaults,
+        count: result.count,
         timestamp: Date.now(),
-        source: "github"
+        source: "backend"
       };
       
       // Store in localStorage
@@ -190,7 +171,7 @@ class MetadataService {
         count: metadata.count
       };
     } catch (error) {
-      console.error("Error fetching vaults from GitHub:", error);
+      console.error("Error fetching vaults:", error);
       return {
         success: false,
         error: error.message || "Failed to fetch vault data"
@@ -199,115 +180,38 @@ class MetadataService {
   }
 
   /**
-   * Fetch validators list from GitHub or local file
+   * Fetch validators list from backend
    * @returns {Promise<Object>} Result object with validators data
    */
   async fetchValidators() {
     try {
-      // First try GitHub
-      try {
-        const validators = await this.fetchFromGitHub('src/validators/mainnet.json');
-        
-        if (validators && Array.isArray(validators)) {
-          // Create metadata object
-          const metadata = {
-            data: validators,
-            count: validators.length,
-            timestamp: Date.now(),
-            source: "github"
-          };
-          
-          // Store in localStorage
-          this.storeData(STORAGE_KEYS.VALIDATORS, metadata);
-          
-          console.log(`Successfully fetched ${validators.length} validators from GitHub`);
-          
-          return {
-            success: true,
-            validators: metadata,
-            count: metadata.count
-          };
-        }
-      } catch (gitHubError) {
-        console.warn("Could not fetch validators from GitHub:", gitHubError);
+      if (!this.isInitialized()) {
+        throw new Error("MetadataService not initialized with API key");
       }
       
-      // If GitHub fails, try with local fallback
-      console.log("Falling back to local validators.json data");
+      // Get validators from backend
+      console.log("Fetching validators from backend API");
+      const result = await apiClient.get('/validators/list');
       
-      try {
-        // Try to fetch validators.json from the public directory
-        const validatorsFileUrl = process.env.PUBLIC_URL ? `${process.env.PUBLIC_URL}/validators.json` : '/validators.json';
-        console.log(`Attempting to fetch validators from: ${validatorsFileUrl}`);
-        const localValidatorsData = await fetch(validatorsFileUrl).catch(err => {
-          console.warn(`Could not load validators.json from public folder:`, err);
-          return null;
-        });
-        
-        if (localValidatorsData) {
-          const validators = await localValidatorsData.json();
-          
-          if (validators && Array.isArray(validators)) {
-            // Create metadata object
-            const metadata = {
-              data: validators,
-              count: validators.length,
-              timestamp: Date.now(),
-              source: "local"
-            };
-            
-            // Store in localStorage
-            this.storeData(STORAGE_KEYS.VALIDATORS, metadata);
-            
-            console.log(`Successfully fetched ${validators.length} validators from local file`);
-            
-            return {
-              success: true,
-              validators: metadata,
-              count: metadata.count
-            };
-          }
-        }
-      } catch (localError) {
-        console.warn("Could not fetch validators from local file:", localError);
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to fetch validators from backend");
       }
       
-      // If all fetches fail, try to use hardcoded validators
-      console.log("Falling back to hardcoded validators data");
-      
-      // Simplified hardcoded validators data
-      const hardcodedValidators = [
-        {
-          "id": "0xa3539ca28e0fd74d2a3c4c552740be77d6914cad2d8ec16583492cc57e8cfa358c62e31cc9106b1700cc169962855a6f",
-          "name": "L0vd"
-        },
-        {
-          "id": "0x832153bf3e09b9cab14414425a0ebaeb889e21d20872ebb990ed9a6102d7dc7f3017d4689f931a8e96d918bdeb184e1b",
-          "name": "BGTScan"
-        },
-        {
-          "id": "0xa232a81b5e834b817db01d85ee13e36552b48413626287de511b6c89b7b8ff4a448e865713fd21c98f1467a58fe6efe5",
-          "name": "StakeUs (lowest commission)"
-        }
-      ];
-      
-      // Create metadata object for hardcoded validators
-      const hardcodedMetadata = {
-        data: hardcodedValidators,
-        count: hardcodedValidators.length,
+      // Format the response
+      const metadata = {
+        data: result.validators,
+        count: result.count,
         timestamp: Date.now(),
-        source: "hardcoded"
+        source: "backend"
       };
       
       // Store in localStorage
-      this.storeData(STORAGE_KEYS.VALIDATORS, hardcodedMetadata);
-      
-      console.log(`Using ${hardcodedValidators.length} hardcoded validators`);
+      this.storeData(STORAGE_KEYS.VALIDATORS, metadata);
       
       return {
         success: true,
-        validators: hardcodedMetadata,
-        count: hardcodedMetadata.count
+        validators: metadata,
+        count: metadata.count
       };
     } catch (error) {
       console.error("Error fetching validators:", error);
@@ -319,7 +223,7 @@ class MetadataService {
   }
 
   /**
-   * Fetch tokens from OogaBooga API
+   * Fetch tokens from OogaBooga API via backend
    * @returns {Promise<Object>} Result object with tokens data
    */
   async fetchOogaBoogaTokens() {
@@ -333,49 +237,25 @@ class MetadataService {
         };
       }
       
-      // Initialize tokenBridge with the API key if we have a provider
-      if (window.ethereum) {
-        const provider = new ethers.providers.Web3Provider(window.ethereum);
-        tokenBridge.initialize(provider, apiKey);
+      // Initialize API client if not already initialized
+      if (!apiClient.isInitialized()) {
+        apiClient.initialize({ apiKey });
       }
       
-      // Fetch tokens from OogaBooga API
-      const response = await tokenBridge.apiCallWithAuth('/v1/tokens');
+      // Call backend API to get token list from OogaBooga
+      console.log("Fetching OogaBooga tokens from backend API");
+      const response = await apiClient.getTokenList({ source: 'oogabooga' });
       
-      if (!response || !Array.isArray(response)) {
-        throw new Error("Invalid response from OogaBooga API");
+      if (!response || !response.success) {
+        throw new Error(response?.error || "Invalid response from backend API");
       }
       
-      // Transform to object with address as key
-      const tokenMap = {};
-      
-      response.forEach(token => {
-        tokenMap[token.address.toLowerCase()] = {
-          address: token.address,
-          symbol: token.symbol,
-          name: token.name,
-          decimals: token.decimals,
-          logoURI: token.logoURI
-        };
-      });
-      
-      // Add BERA native token if not included
-      if (!tokenMap["0x0000000000000000000000000000000000000000"]) {
-        tokenMap["0x0000000000000000000000000000000000000000"] = {
-          address: "0x0000000000000000000000000000000000000000",
-          symbol: "BERA",
-          name: "Berachain Token",
-          decimals: 18,
-          logoURI: "https://res.cloudinary.com/duv0g402y/raw/upload/v1717773645/src/assets/bera.png"
-        };
-      }
-      
-      // Create a metadata object similar to the local file format
+      // Create a metadata object from the backend response
       const metadata = {
         timestamp: Date.now(),
-        count: response.length + 1, // +1 for BERA if we added it
+        count: response.count,
         source: "oogabooga",
-        data: tokenMap
+        data: response.tokens
       };
       
       // Store in localStorage
@@ -387,17 +267,17 @@ class MetadataService {
         count: metadata.count
       };
     } catch (error) {
-      console.error("Error fetching tokens from OogaBooga:", error);
+      console.error("Error fetching OogaBooga tokens from backend:", error);
       return {
         success: false,
-        error: error.message || "Failed to fetch token data from OogaBooga"
+        error: error.message || "Failed to fetch OogaBooga token data from backend"
       };
     }
   }
 
   /**
    * Get GitHub tokens from localStorage or fetch if not available
-   * @param {boolean} forceRefresh - Force refresh from GitHub
+   * @param {boolean} forceRefresh - Force refresh from backend
    * @returns {Promise<Object>} Result object with tokens data
    */
   async getGitHubTokens(forceRefresh = false) {
@@ -413,13 +293,13 @@ class MetadataService {
       };
     }
     
-    // Fetch from GitHub
+    // Fetch from backend
     return await this.fetchGitHubTokens();
   }
 
   /**
    * Get OogaBooga tokens from localStorage or fetch if not available
-   * @param {boolean} forceRefresh - Force refresh from OogaBooga
+   * @param {boolean} forceRefresh - Force refresh from backend
    * @returns {Promise<Object>} Result object with tokens data
    */
   async getOogaBoogaTokens(forceRefresh = false) {
@@ -435,13 +315,13 @@ class MetadataService {
       };
     }
     
-    // Fetch from OogaBooga
+    // Fetch from backend API
     return await this.fetchOogaBoogaTokens();
   }
 
   /**
    * Get vaults from localStorage or fetch if not available
-   * @param {boolean} forceRefresh - Force refresh from GitHub
+   * @param {boolean} forceRefresh - Force refresh from backend
    * @returns {Promise<Object>} Result object with vaults data
    */
   async getVaults(forceRefresh = false) {
@@ -457,13 +337,13 @@ class MetadataService {
       };
     }
     
-    // Fetch from GitHub
+    // Fetch from backend
     return await this.fetchVaults();
   }
 
   /**
    * Get validators from localStorage or fetch if not available
-   * @param {boolean} forceRefresh - Force refresh from GitHub
+   * @param {boolean} forceRefresh - Force refresh from backend
    * @returns {Promise<Object>} Result object with validators data
    */
   async getValidators(forceRefresh = false) {
@@ -479,16 +359,20 @@ class MetadataService {
       };
     }
     
-    // Fetch from GitHub
+    // Fetch from backend
     return await this.fetchValidators();
   }
 
   /**
-   * Update all metadata from sources
+   * Update all metadata from backend sources
    * @returns {Promise<Object>} Result object with status for all metadata types
    */
   async updateAllMetadata() {
     try {
+      if (!this.isInitialized()) {
+        throw new Error("MetadataService not initialized with API key");
+      }
+      
       // Fetch all metadata types in parallel
       const [
         githubTokensResult,

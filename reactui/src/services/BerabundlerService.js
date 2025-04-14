@@ -142,16 +142,32 @@ class BerabundlerService {
       // Extract swapParams for the swap
       const swapParams = tx.swapParams || {};
       
+      // Ensure token amount is properly normalized
+      let tokenAmount = "0";
+      if (!isNativeToken && tx.token.amountIn) {
+        tokenAmount = tx.token.amountIn.toString();
+      }
+      
+      // Normalize value 
+      let value = "0";
+      if (tx.value) {
+        value = tx.value.toString();
+        // Remove 0x prefix if present for consistency
+        if (value.startsWith("0x")) {
+          value = ethers.BigNumber.from(value).toString();
+        }
+      }
+      
       // Use API's transaction data directly
       return {
         operationType: TYPE_SWAP,
         target: tx.to, // Router address from API
         data: tx.data, // Use exact data from API response
-        value: tx.value || "0",
+        value: value,
         tokenAddress: isNativeToken ? ethers.constants.AddressZero : tx.token.address,
-        tokenAmount: isNativeToken ? 0 : tx.token.amountIn,
+        tokenAmount: tokenAmount,
         outputToken: swapParams.outputToken || ethers.constants.AddressZero,
-        minOutputAmount: swapParams.minOutput || 0
+        minOutputAmount: swapParams.minOutput || "0"
       };
     });
   }
@@ -261,16 +277,32 @@ class BerabundlerService {
       // Create a single operation for the swap
       const isNativeToken = swapTx.token.address === 'native' || swapTx.token.symbol === 'BERA';
       
+      // Ensure token amount is properly normalized
+      let tokenAmount = "0";
+      if (!isNativeToken && swapTx.token.amountIn) {
+        tokenAmount = swapTx.token.amountIn.toString();
+      }
+      
+      // Normalize value 
+      let value = "0";
+      if (swapTx.value) {
+        value = swapTx.value.toString();
+        // Remove 0x prefix if present for consistency
+        if (value.startsWith("0x")) {
+          value = ethers.BigNumber.from(value).toString();
+        }
+      }
+      
       // Create an operation structure that matches the Berabundle_SwapBundler contract
       const operation = {
         operationType: TYPE_SWAP,
         target: swapTx.to, // Router address from API
         data: swapTx.data, // Use exact data from API response
-        value: swapTx.value || "0",
+        value: value,
         tokenAddress: isNativeToken ? ethers.constants.AddressZero : swapTx.token.address,
-        tokenAmount: isNativeToken ? 0 : swapTx.token.amountIn,
+        tokenAmount: tokenAmount,
         outputToken: swapParams.outputToken || ethers.constants.AddressZero,
-        minOutputAmount: swapParams.minOutput || 0
+        minOutputAmount: swapParams.minOutput || "0"
       };
       
       console.log("[DEBUG] Operation for direct swap:", JSON.stringify(operation, null, 2));
@@ -337,17 +369,34 @@ class BerabundlerService {
             
             const isNativeToken = tx.token.address === 'native' || tx.token.symbol === 'BERA';
             const inputToken = isNativeToken ? ethers.constants.AddressZero : tx.token.address;
-            const inputAmount = tx.token.amountIn;
+            
+            // Ensure consistent type for input amount
+            let inputAmount = "0";
+            if (tx.token.amountIn) {
+                inputAmount = tx.token.amountIn.toString();
+            }
+            
+            // Normalize value for native token transfers
+            let value = "0";
+            if (isNativeToken && inputAmount !== "0") {
+                value = inputAmount;
+            } else if (tx.value) {
+                value = tx.value.toString();
+                // Convert hex string if needed
+                if (value.startsWith("0x")) {
+                    value = ethers.BigNumber.from(value).toString();
+                }
+            }
             
             return {
                 operationType: TYPE_SWAP,
                 target: tx.to, // Router address
                 data: tx.data, // Original router call data
-                value: isNativeToken ? inputAmount : 0,
+                value: value,
                 tokenAddress: inputToken,
-                tokenAmount: isNativeToken ? 0 : inputAmount,
+                tokenAmount: isNativeToken ? "0" : inputAmount,
                 outputToken: swapParams.outputToken || ethers.constants.AddressZero,
-                minOutputAmount: swapParams.minOutput || 0
+                minOutputAmount: swapParams.minOutput || "0"
             };
         });
         

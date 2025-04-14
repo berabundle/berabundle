@@ -2,10 +2,11 @@
  * RewardsService.js - Service for checking and claiming rewards in the React UI
  * 
  * This adapter manages communication with the BeraBundle rewards system
+ * using the backend API for all blockchain interactions
  */
 
 import { ethers } from 'ethers';
-import tokenBridge from './TokenBridge';
+import apiClient from './ApiClient';
 
 /**
  * Service for checking and claiming rewards in the React UI
@@ -16,14 +17,12 @@ class RewardsService {
     this.checkedRewards = [];
     this.initialized = false;
     this.apiKey = null;
-    this.tokenInfoCache = new Map(); // Initialize token cache
     
-    // Store contract addresses in one place to avoid inconsistencies
+    // Contract addresses kept for reference, actual logic moved to backend
     this.contractAddresses = {
-      // Always use lowercase addresses to be converted consistently - copied from config.js
       bgtStaker: '0x44f07ce5afecbcc406e6befd40cc2998eeb8c7c6',
-      honeyToken: '0x7eeca4205ff31f947edbd49195a7a88e6a91161b', // HONEY token from BGT Staker rewards
-      bgtToken: '0x656b95e550c07a9ffe548bd4085c72418ceb1dba', // BGT token (validatorBoostAddress in config)
+      honeyToken: '0x7eeca4205ff31f947edbd49195a7a88e6a91161b',
+      bgtToken: '0x656b95e550c07a9ffe548bd4085c72418ceb1dba',
       rewardVaultFactory: '0x94ad6ac84f6c6fba8b8ccbd71d9f4f101def52a8'
     };
   }
@@ -37,6 +36,10 @@ class RewardsService {
     this.provider = provider;
     this.apiKey = apiKey;
     this.initialized = Boolean(provider && apiKey);
+    
+    // Initialize API client with the same API key
+    apiClient.initialize({ apiKey });
+    
     return this.initialized;
   }
   
@@ -48,7 +51,7 @@ class RewardsService {
   }
   
   /**
-   * Check all rewards for a user, mirroring the CLI's checkAllRewards function
+   * Check all rewards for a user using the backend API
    * @param {string} address - Wallet address to check
    * @returns {Promise<Object>} Rewards information
    */
@@ -61,86 +64,30 @@ class RewardsService {
         throw new Error(`Invalid address provided: ${address}`);
       }
       
-      // Normalize user address - always convert to lowercase first to ensure consistency
+      // Normalize user address
       const normalizedAddress = ethers.utils.getAddress(address.toLowerCase());
       console.log(`Checking all rewards for ${normalizedAddress}...`);
       
-      // First get all vaults with active stakes
-      console.log("Finding vaults with active stakes...");
+      // Use the API client to check rewards
+      const result = await apiClient.checkRewards(normalizedAddress);
       
-      // Get all vaults
-      const vaultRewards = await this.checkVaultRewards(normalizedAddress);
-      console.log(`Found ${vaultRewards.length} vaults with active stakes`);
-      
-      // Track all rewards
-      const allRewards = [...vaultRewards];
-      
-      // Check BGT Staker rewards
-      console.log(`Checking BGT Staker rewards for ${normalizedAddress}...`);
-      const bgtStakerRewards = await this.checkBGTStakerRewards(normalizedAddress);
-      
-      if (bgtStakerRewards) {
-        allRewards.push(bgtStakerRewards);
-        console.log(`Found BGT Staker rewards: ${bgtStakerRewards.earned}`);
-      } else {
-        console.log("No BGT Staker rewards found.");
+      // Handle API response
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to check rewards");
       }
       
-      // Calculate summary information
-      const rewardsByToken = {};
-      let totalValue = 0;
-      
-      for (const reward of allRewards) {
-        // Add to token-specific total
-        const tokenSymbol = reward.rewardToken.symbol;
-        
-        if (!rewardsByToken[tokenSymbol]) {
-          rewardsByToken[tokenSymbol] = {
-            amount: 0,
-            formatted: "0",
-            token: reward.rewardToken
-          };
-        }
-        
-        // Add to token amount - values are already rounded to 2 decimal places 
-        const amount = parseFloat(reward.earned) || 0;
-        rewardsByToken[tokenSymbol].amount += amount;
-        // Ensure we're consistently using 2 decimal places
-        rewardsByToken[tokenSymbol].formatted = rewardsByToken[tokenSymbol].amount.toFixed(2);
-        
-        // Add to total value - values are already rounded
-        totalValue += (reward.valueUsd || 0);
+      // Log results
+      if (result.rewards) {
+        console.log(`Found ${result.rewards.length} rewards`);
       }
-      
-      // Make sure total value is also rounded to 2 decimal places
-      totalValue = parseFloat(totalValue.toFixed(2));
-      
-      // Format summary message for console
-      let summaryMessage = "Rewards Summary:\n";
-      
-      // Add rewards by token
-      for (const [symbol, info] of Object.entries(rewardsByToken)) {
-        if (info.amount > 0) {
-          // Display just the formatted amount without the symbol
-          summaryMessage += `  - ${info.formatted}\n`;
-        }
-      }
-      
-      console.log(summaryMessage);
       
       // Save rewards for later (for claiming)
-      this.checkedRewards = allRewards;
+      this.checkedRewards = result.rewards || [];
       
-      return {
-        success: true,
-        rewards: allRewards,
-        totalValue: totalValue,
-        rewardsByToken: rewardsByToken
-      };
+      return result;
     } catch (error) {
       console.error("Error checking rewards:", error);
       
-      // No mock data - return the error to be handled by the UI
       return {
         success: false,
         error: error.message || "Failed to check rewards",
@@ -578,6 +525,9 @@ class RewardsService {
   
   /**
    * Helper function to retry a failed promise with exponential backoff
+   * This is kept for backward compatibility but will be deprecated
+   * in favor of backend retry logic in the future
+   * 
    * @param {Function} operation - Function that returns a promise to retry
    * @param {number} maxRetries - Maximum number of retries
    * @param {number} baseDelay - Base delay in milliseconds
@@ -605,8 +555,7 @@ class RewardsService {
           throw error;
         }
         
-        // Calculate backoff delay with enhanced jitter to prevent all retries happening simultaneously
-        // Use a wider range of jitter (0.5 to 1.5) to make sure retries aren't bunched together
+        // Calculate backoff delay with jitter
         const jitter = 0.5 + Math.random(); // Random value between 0.5 and 1.5
         const delay = baseDelay * Math.pow(2, i) * jitter;
         
@@ -912,7 +861,7 @@ class RewardsService {
   }
   
   /**
-   * Claim selected rewards for an address
+   * Claim selected rewards for an address using the backend API
    * @param {string} address - Wallet address to claim for
    * @param {Array} selectedRewards - Array of selected reward objects
    * @returns {Promise<Object>} Claim result
@@ -930,7 +879,7 @@ class RewardsService {
         throw new Error("Provider not available");
       }
       
-      // Normalize address - always convert to lowercase first for consistency
+      // Normalize address
       const normalizedAddress = ethers.utils.getAddress(address.toLowerCase());
       
       // Need a signer to send transactions
@@ -941,150 +890,27 @@ class RewardsService {
       
       console.log(`Claiming rewards for ${normalizedAddress}...`);
       
-      // Group rewards by type
-      const vaultRewards = selectedRewards.filter(r => r.type === 'vault');
-      const bgtStakerRewards = selectedRewards.find(r => r.type === 'bgtStaker');
+      // Use the API client to claim rewards
+      const result = await apiClient.claimRewards(normalizedAddress, selectedRewards);
       
-      // Track claim results
-      const claimResults = [];
-      const claimedRewards = [];
-      
-      // 1. Claim vault rewards
-      if (vaultRewards.length > 0) {
-        console.log(`Claiming rewards from ${vaultRewards.length} vaults...`);
-        
-        // Process each vault
-        for (const reward of vaultRewards) {
-          try {
-            console.log(`Claiming from vault ${reward.name} (${reward.vaultAddress})...`);
-            
-            // Validate and normalize vault address
-            if (!reward.vaultAddress || typeof reward.vaultAddress !== 'string' || !reward.vaultAddress.startsWith('0x')) {
-              console.error(`Invalid vault address: ${reward.vaultAddress}`);
-              throw new Error(`Invalid vault address format for ${reward.name}`);
-            }
-            
-            // Normalize vault address - always convert to lowercase first for consistency
-            const normalizedVaultAddress = ethers.utils.getAddress(reward.vaultAddress.toString().toLowerCase());
-            
-            // Create contract instance with signer
-            const vaultContract = new ethers.Contract(
-              normalizedVaultAddress,
-              ["function getReward() external"],
-              signer
-            );
-            
-            // Execute claim
-            const tx = await vaultContract.getReward();
-            console.log(`Transaction sent: ${tx.hash}`);
-            
-            // Wait for confirmation
-            console.log("Waiting for transaction confirmation...");
-            const receipt = await tx.wait();
-            
-            if (receipt.status === 1) {
-              console.log(`Successfully claimed ${reward.earned} ${reward.rewardToken.symbol} from ${reward.name}`);
-              claimedRewards.push(reward);
-              claimResults.push({
-                type: 'vault',
-                name: reward.name,
-                success: true,
-                amount: reward.earned,
-                symbol: reward.rewardToken.symbol,
-                txHash: tx.hash
-              });
-            } else {
-              console.error(`Claim transaction failed for ${reward.name}`);
-              claimResults.push({
-                type: 'vault',
-                name: reward.name,
-                success: false,
-                error: "Transaction failed"
-              });
-            }
-          } catch (error) {
-            console.error(`Error claiming from vault ${reward.name}:`, error);
-            claimResults.push({
-              type: 'vault',
-              name: reward.name,
-              success: false,
-              error: error.message || "Claim failed"
-            });
-          }
-        }
+      // Handle API response
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to claim rewards");
       }
       
-      // 2. Claim BGT Staker rewards
-      if (bgtStakerRewards) {
-        try {
-          console.log(`Claiming BGT Staker rewards...`);
-          
-          // Normalize address - always convert to lowercase first for consistency
-          const normalizedBgtStakerAddress = ethers.utils.getAddress(bgtStakerRewards.contractAddress.toLowerCase());
-          
-          // Create contract instance with signer
-          const bgtStaker = new ethers.Contract(
-            normalizedBgtStakerAddress,
-            ["function getReward() external"],
-            signer
-          );
-          
-          // Execute claim
-          const tx = await bgtStaker.getReward();
-          console.log(`Transaction sent: ${tx.hash}`);
-          
-          // Wait for confirmation
-          console.log("Waiting for transaction confirmation...");
-          const receipt = await tx.wait();
-          
-          if (receipt.status === 1) {
-            console.log(`Successfully claimed ${bgtStakerRewards.earned} ${bgtStakerRewards.rewardToken.symbol} from BGT Staker`);
-            claimedRewards.push(bgtStakerRewards);
-            claimResults.push({
-              type: 'bgtStaker',
-              name: bgtStakerRewards.name,
-              success: true,
-              amount: bgtStakerRewards.earned,
-              symbol: bgtStakerRewards.rewardToken.symbol,
-              txHash: tx.hash
-            });
-          } else {
-            console.error("BGT Staker claim transaction failed");
-            claimResults.push({
-              type: 'bgtStaker',
-              name: bgtStakerRewards.name,
-              success: false,
-              error: "Transaction failed"
-            });
-          }
-        } catch (error) {
-          console.error("Error claiming BGT Staker rewards:", error);
-          claimResults.push({
-            type: 'bgtStaker',
-            name: bgtStakerRewards.name,
-            success: false,
-            error: error.message || "Claim failed"
-          });
-        }
+      // Log results
+      console.log(`Claim operations complete. ${result.claimedRewards?.length || 0}/${selectedRewards.length} claims successful.`);
+      
+      // Update local state to reflect claimed rewards
+      if (result.remainingRewards) {
+        this.checkedRewards = result.remainingRewards;
+      } else if (result.claimedRewards) {
+        // Remove claimed rewards from the checked rewards if not provided by the API
+        const claimedIds = new Set(result.claimedRewards.map(r => r.id));
+        this.checkedRewards = this.checkedRewards.filter(r => !claimedIds.has(r.id));
       }
       
-      // Calculate total claimed value
-      const totalClaimed = claimedRewards.reduce((sum, reward) => sum + (reward.valueUsd || 0), 0);
-      
-      // Remove claimed rewards from the checked rewards
-      const claimedIds = new Set(claimedRewards.map(r => r.id));
-      this.checkedRewards = this.checkedRewards.filter(r => !claimedIds.has(r.id));
-      
-      // Summarize results
-      console.log(`Claim operations complete. ${claimedRewards.length}/${selectedRewards.length} claims successful.`);
-      
-      return {
-        success: claimedRewards.length > 0,
-        claimedRewards: claimedRewards,
-        claimResults: claimResults,
-        totalClaimed,
-        remainingRewards: this.checkedRewards
-      };
+      return result;
     } catch (error) {
       console.error("Error claiming rewards:", error);
       
@@ -1122,57 +948,65 @@ class RewardsService {
   }
   
   /**
-   * Load validators from file
+   * Get validators list from the backend API
    * @returns {Promise<Array<Object>>} Array of validator objects
    */
-  async loadValidatorsFromFile() {
+  async getValidators() {
     try {
-      // Import and use metadataService to get validator list
-      const metadataService = await import('../services/MetadataService').then(module => module.default);
+      // Use the API client to get validators
+      const result = await apiClient.getValidators();
       
-      // First try to load from cache
-      const validatorsResult = await metadataService.getValidators();
-      
-      // Extract validators from the result
-      if (validatorsResult && validatorsResult.success) {
-        if (validatorsResult.validators) {
-          // Try different structures based on the format
-          if (Array.isArray(validatorsResult.validators.data)) {
-            // { validators: { data: [...] } }
-            return validatorsResult.validators.data;
-          } else if (Array.isArray(validatorsResult.validators)) {
-            // { validators: [...] }
-            return validatorsResult.validators;
-          } else if (validatorsResult.validators.validators && Array.isArray(validatorsResult.validators.validators)) {
-            // { validators: { validators: [...] } }
-            return validatorsResult.validators.validators;
-          }
-        }
+      // Handle API response
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to get validators");
       }
       
-      // If we couldn't load from cache, fetch from source
-      console.log("No validators in cache, fetching from source...");
-      const freshValidatorsResult = await metadataService.fetchValidators();
-      
-      if (freshValidatorsResult && freshValidatorsResult.success) {
-        if (freshValidatorsResult.validators && Array.isArray(freshValidatorsResult.validators.data)) {
-          return freshValidatorsResult.validators.data;
-        }
-      }
-      
-      console.warn("No validators found in source data");
-      return [];
-      
+      return result.validators || [];
     } catch (error) {
-      console.error("Error loading validators:", error);
+      console.error("Error getting validators:", error);
       return [];
+    }
+  }
+
+  /**
+   * Find validator by ID using the cached validator map
+   * @param {string} validatorId - Validator ID to find
+   * @returns {Promise<Object>} Validator information
+   */
+  async findValidator(validatorId) {
+    if (!validatorId) return { id: "unknown", name: "Unknown Validator" };
+    
+    try {
+      // Get validators if not already cached
+      if (!this.validatorMap || Object.keys(this.validatorMap).length === 0) {
+        const validators = await this.getValidators();
+        this.validatorMap = this.buildValidatorMap(validators);
+      }
+      
+      // Try to find by lowercase key for case-insensitive matching
+      const validator = this.validatorMap[validatorId.toLowerCase()];
+      if (validator) {
+        return validator;
+      }
+      
+      // If not found, create a generic validator object
+      return {
+        id: validatorId,
+        name: `Validator ${validatorId.substring(0, 8)}`
+      };
+    } catch (error) {
+      console.error("Error finding validator:", error);
+      return { 
+        id: validatorId,
+        name: `Validator ${validatorId.substring(0, 8)}`
+      };
     }
   }
 
   /**
    * Build validator map for efficient lookups
    * @param {Array<Object>} validators - Array of validator objects
-   * @returns {Object} Map of validator pubkeys to validator objects
+   * @returns {Object} Map of validator IDs to validator objects
    */
   buildValidatorMap(validators) {
     const validatorMap = {};
@@ -1181,7 +1015,6 @@ class RewardsService {
       if (validator.id) {
         // Store with id as key (case-insensitive)
         validatorMap[validator.id.toLowerCase()] = {
-          pubkey: validator.id,  // Use id as pubkey
           id: validator.id,
           name: validator.name || `Validator ${validator.id.substring(0, 8)}`
         };
@@ -1193,7 +1026,7 @@ class RewardsService {
   }
 
   /**
-   * Check validator boosts for a user
+   * Check validator boosts for a user using the backend API
    * @param {string} address - User wallet address
    * @returns {Promise<Object>} Validator boost information
    */
@@ -1215,168 +1048,19 @@ class RewardsService {
       // Normalize the address
       const normalizedAddress = ethers.utils.getAddress(address.toLowerCase());
       
-      // Get contract addresses from config
-      const validatorBoostAddress = ethers.utils.getAddress(this.contractAddresses.bgtToken.toLowerCase());
-      console.log(`Using validator boost contract at: ${validatorBoostAddress}`);
+      // Use the API client to get validator boosts
+      const result = await apiClient.getValidatorBoosts(normalizedAddress);
       
-      // Create contract instance for the validator boost contract with the correct ABIs
-      const validatorBoostABI = [
-        "function boosts(address account) external view returns (uint256)",
-        "function boostees(bytes calldata pubkey) external view returns (uint256)",
-        "function boosted(address account, bytes calldata pubkey) external view returns (uint256)",
-        "function queuedBoost(address account) external view returns (uint256)",
-        "function boostedQueue(address account, bytes calldata pubkey) external view returns (uint256)"
-      ];
-      
-      const validatorBoost = new ethers.Contract(
-        validatorBoostAddress,
-        validatorBoostABI,
-        this.provider
-      );
-      
-      // Load validators from file and build map
-      let validators = await this.loadValidatorsFromFile();
-      
-      // Create validator map for efficient lookups if not already cached
-      if (!this.validatorMap || Object.keys(this.validatorMap).length === 0) {
-        this.validatorMap = this.buildValidatorMap(validators);
+      // Handle API response
+      if (!result || !result.success) {
+        throw new Error(result?.error || "Failed to check validator boosts");
       }
       
-      // Check total boosts to see if user has any boosts allocated
-      let totalBoosts, totalQueuedBoost;
-      try {
-        totalBoosts = await this.retryPromise(() => validatorBoost.boosts(normalizedAddress), 3);
-        totalQueuedBoost = await this.retryPromise(() => validatorBoost.queuedBoost(normalizedAddress), 3);
-        
-        console.log(`Total active boosts: ${ethers.utils.formatEther(totalBoosts)} BGT`);
-        console.log(`Total queued boosts: ${ethers.utils.formatEther(totalQueuedBoost)} BGT`);
-      } catch (err) {
-        console.error("Error checking total boosts:", err);
-        return { 
-          activeBoosts: [], 
-          queuedBoosts: [],
-          error: "Failed to check validator contract. Please try again later."
-        };
-      }
+      // Log results
+      console.log(`Found ${result.activeBoosts?.length || 0} active validator boosts`);
+      console.log(`Found ${result.queuedBoosts?.length || 0} queued validator boosts`);
       
-      // Track active and queued boosts
-      const activeBoosts = [];
-      const queuedBoosts = [];
-      
-      // Helper function to convert hex string to bytes calldata format
-      const hexToBytes = (hexString) => {
-        // Ensure the hex string starts with 0x
-        const hexWithPrefix = hexString.startsWith('0x') ? hexString : '0x' + hexString;
-        try {
-          // Convert hex string to byte array as expected by the contract
-          return ethers.utils.arrayify(hexWithPrefix);
-        } catch (err) {
-          console.warn(`Failed to convert hex string to bytes: ${hexString}`, err);
-          return null;
-        }
-      };
-      
-      // Only check individual validators if user has any boost allocation
-      if (!totalBoosts.isZero() || !totalQueuedBoost.isZero()) {
-        console.log(`User has boosts: ${ethers.utils.formatEther(totalBoosts)} BGT active and ${ethers.utils.formatEther(totalQueuedBoost)} BGT queued`);
-        
-        // Get all validators from the map
-        const validatorsToCheck = Object.values(this.validatorMap);
-        
-        // Check all validators like in the CLI version
-        console.log(`Checking boosts for all ${validatorsToCheck.length} validators...`);
-        
-        // Check validators in batches to improve performance
-        if (validatorsToCheck.length > 0) {
-          // Process in batches of reasonable size to avoid overwhelming the network
-          const BATCH_SIZE = 5;
-          const totalValidators = validatorsToCheck.length;
-          
-          for (let i = 0; i < totalValidators; i += BATCH_SIZE) {
-            const batch = validatorsToCheck.slice(i, i + BATCH_SIZE);
-            const batchEnd = Math.min(i + BATCH_SIZE, totalValidators);
-            console.log(`Processing batch ${i+1}-${batchEnd} of ${totalValidators} validators...`);
-            
-            // Process batch in parallel for better performance
-            await Promise.all(batch.map(async (validator) => {
-              try {
-                const validatorKey = validator.pubkey || validator.id;
-                if (!validatorKey) return;
-                
-                // Convert validator key to bytes
-                const validatorBytes = hexToBytes(validatorKey);
-                if (!validatorBytes) {
-                  console.warn(`Skipping validator ${validator.name} - invalid pubkey format`);
-                  return;
-                }
-                
-                // Check for active and queued boosts in parallel
-                const [boostAmount, queuedAmount] = await Promise.all([
-                  this.retryPromise(() => validatorBoost.boosted(normalizedAddress, validatorBytes), 3),
-                  this.retryPromise(() => validatorBoost.boostedQueue(normalizedAddress, validatorBytes), 3)
-                ]);
-                
-                // Process active boost if exists
-                if (!boostAmount.isZero()) {
-                  console.log(`Found boost for validator ${validator.name}: ${ethers.utils.formatEther(boostAmount)} BGT`);
-                  
-                  // Get total boost for this validator
-                  const totalValidatorBoost = await this.retryPromise(() => 
-                    validatorBoost.boostees(validatorBytes), 3
-                  );
-                  
-                  // Calculate share percentage
-                  const userBoostAmountFloat = parseFloat(ethers.utils.formatEther(boostAmount));
-                  const totalBoostFloat = parseFloat(ethers.utils.formatEther(totalValidatorBoost));
-                  const sharePercent = totalBoostFloat > 0 
-                    ? ((userBoostAmountFloat / totalBoostFloat) * 100).toFixed(2)
-                    : "0.00";
-                  
-                  activeBoosts.push({
-                    pubkey: validatorKey,
-                    id: validator.id,
-                    name: validator.name,
-                    userBoostAmount: ethers.utils.formatEther(boostAmount),
-                    totalBoost: ethers.utils.formatEther(totalValidatorBoost),
-                    share: sharePercent,
-                    status: "active"
-                  });
-                }
-                
-                // Process queued boost if exists
-                if (!queuedAmount.isZero()) {
-                  console.log(`Found queued boost for validator ${validator.name}: ${ethers.utils.formatEther(queuedAmount)} BGT`);
-                  
-                  queuedBoosts.push({
-                    pubkey: validatorKey,
-                    id: validator.id,
-                    name: validator.name,
-                    queuedBoostAmount: ethers.utils.formatEther(queuedAmount),
-                    status: "queued"
-                  });
-                }
-              } catch (err) {
-                console.warn(`Error checking boost for validator ${validator.name}:`, err);
-              }
-            }));
-            
-            // Small delay between batches to prevent rate limiting
-            if (i + BATCH_SIZE < totalValidators) {
-              await new Promise(resolve => setTimeout(resolve, 200));
-            }
-          }
-        }
-      }
-      
-      console.log(`Found ${activeBoosts.length} active validator boosts`);
-      console.log(`Found ${queuedBoosts.length} queued validator boosts`);
-      
-      return {
-        activeBoosts,
-        queuedBoosts,
-        totalActiveBoost: ethers.utils.formatEther(totalBoosts),
-        totalQueuedBoost: ethers.utils.formatEther(totalQueuedBoost)
-      };
+      return result;
     } catch (error) {
       console.error("Error checking validator boosts:", error);
       return { 

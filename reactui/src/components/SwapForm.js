@@ -47,12 +47,11 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
       setSwapAmounts(initialAmounts);
       
       // Set initial approval status to "checking" to show loading state
-      // but don't actually run the checks yet - they'll happen when fields are focused/blurred
       const initialApprovalStatus = {};
       selectedTokens.forEach(token => {
         if (!(token.isNative || token.address === 'native' || token.symbol === 'BERA')) {
           initialApprovalStatus[token.address] = {
-            checking: false, // Don't show as checking initially
+            checking: true, // Show as checking initially
             lastCheckedAmount: null
           };
         }
@@ -60,8 +59,14 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
       
       setApprovalStatus(initialApprovalStatus);
       
-      // We won't run approval checks on all tokens at once - 
-      // Users will need to interact with fields to trigger checks
+      // Check approvals for all tokens on component load
+      const tokensToCheck = selectedTokens.filter(
+        token => !(token.isNative || token.address === 'native' || token.symbol === 'BERA')
+      );
+      
+      if (tokensToCheck.length > 0) {
+        setTimeout(() => checkTokenApprovals(tokensToCheck), 100);
+      }
     }
   }, [selectedTokens]);
   
@@ -164,73 +169,57 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
             }
           }
           
-          // Get token decimals from the token object for consistent usage
-          const tokenDecimals = token.decimals || 18;
-          
-          // Get the current swap amount - this is the ACTUAL amount we want to swap
-          // If the user has entered a specific amount, use that
-          const actualSwapAmount = swapAmounts[token.address]?.amount > 0 ? 
-            swapAmounts[token.address].amount : tokenAmountToCheck;
-            
           // Format with appropriate precision - this is critical for correct comparison
-          const formattedActualAmount = parseFloat(actualSwapAmount).toFixed(6);
+          const formattedActualAmount = parseFloat(tokenAmountToCheck).toFixed(6);
           console.log(`Using ACTUAL swap amount for approval check: ${formattedActualAmount} ${token.symbol}`);
           
-          // DIRECTLY check the contract allowance - don't use the USD threshold
+          // Get the backend's approval check result
           const approvalResult = await tokenBridge.checkBundlerApproval(
             token.address,
             address,
             formattedActualAmount // Use the actual swap amount
           );
           
-          // Add extra debug information - use the correct actualSwapAmount
-          approvalResult.actualSwapAmount = actualSwapAmount;
+          // Adapt the backend's response to what our UI expects
+          const uiApprovalResult = {
+            ...approvalResult,
+            checking: false,
+            error: approvalResult.error || null,
+            actualSwapAmount: tokenAmountToCheck,
+            tokenPrice: token.priceUsd,
+            requiredUsdAmount: maxApprovalUsd,
+            requiredTokenAmount: amountToCheck
+          };
           
-          // Add the token price for display
-          approvalResult.tokenPrice = token.priceUsd;
-          
-          // Add token-specific formatted value in USD
-          if (token.priceUsd) {
+          // Calculate USD values if not provided by backend
+          if (token.priceUsd && approvalResult.formattedAllowance) {
             const approvalUsdValue = parseFloat(approvalResult.formattedAllowance) * token.priceUsd;
             const swapUsdValue = parseFloat(formattedActualAmount) * token.priceUsd;
             
             // Store for UI display
-            approvalResult.approvalUsdValue = approvalUsdValue.toFixed(2);
-            approvalResult.swapUsdValue = swapUsdValue.toFixed(2);
+            uiApprovalResult.approvalUsdValue = approvalUsdValue.toFixed(2);
+            uiApprovalResult.swapUsdValue = swapUsdValue.toFixed(2);
             
             console.log(`Token ${token.symbol}: Allowance=$${approvalUsdValue.toFixed(2)}, Swap Amount=$${swapUsdValue.toFixed(2)}`);
             
-            // CRITICAL FIX: Override the approval status based on USD values
-            // Instead of using the token quantity comparison from the contract
-            // we'll compare USD values which is what the user expects
-            const originalIsApproved = approvalResult.isApproved;
-            
             // If allowance USD value is greater than swap USD value, consider it approved
-            approvalResult.isApproved = approvalUsdValue >= swapUsdValue;
-            
-            if (originalIsApproved !== approvalResult.isApproved) {
-              console.log(`OVERRIDE: Changed approval status from ${originalIsApproved} to ${approvalResult.isApproved} based on USD values`);
+            if (approvalUsdValue >= swapUsdValue) {
+              uiApprovalResult.isApproved = true;
             }
           }
           
           // Log the result
-          if (approvalResult.isApproved) {
-            console.log(`✅ APPROVED: Token ${token.symbol} is approved for $${approvalResult.swapUsdValue} (${formattedActualAmount} ${token.symbol})`);
+          if (uiApprovalResult.isApproved) {
+            console.log(`✅ APPROVED: Token ${token.symbol} is approved for $${uiApprovalResult.swapUsdValue || '?'} (${formattedActualAmount} ${token.symbol})`);
           } else {
-            console.log(`❌ NOT APPROVED: Token ${token.symbol} needs approval for $${approvalResult.swapUsdValue} (${formattedActualAmount} ${token.symbol})`);
+            console.log(`❌ NOT APPROVED: Token ${token.symbol} needs approval for $${uiApprovalResult.swapUsdValue || '?'} (${formattedActualAmount} ${token.symbol})`);
           }
           
-          console.log(`Approval check for ${token.symbol}:`, approvalResult);
+          console.log(`Approval check for ${token.symbol}:`, uiApprovalResult);
           
           return {
             token,
-            result: { 
-              ...approvalResult,
-              checking: false,
-              error: null,
-              requiredUsdAmount: maxApprovalUsd, // Store USD amount for reference
-              requiredTokenAmount: amountToCheck // Store token amount
-            }
+            result: uiApprovalResult
           };
         } catch (error) {
           console.error(`Error checking approval for ${token.symbol}:`, error);
@@ -361,36 +350,24 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
       setError('');
     }
     
-    // Only check approvals if explicitly requested (on blur or on quick percentage selection)
-    if (checkApproval && isValid && !(token.isNative || token.address === 'native' || token.symbol === 'BERA')) {
-      console.log(`Checking approval for ${token.symbol} with amount ${numericAmount}`);
-      
-      // Update status to show checking
-      setApprovalStatus(prev => ({
-        ...prev,
-        [token.address]: {
-          ...(prev[token.address] || {}),
-          checking: true,
-          lastCheckedAmount: numericAmount.toString()
-        }
-      }));
-      
-      // Check just this token
-      setTimeout(() => checkTokenApprovals([token]), 100);
-    }
+    // We no longer check approvals automatically when amount changes
+    // Approvals are only checked when the component loads
+    // and after explicit approve/revoke actions
   };
   
   // Approve a token to the bundler with USD amount limit
-  const handleApproveToken = async (token) => {
+  const handleApproveToken = async (token, customUsdAmount = null) => {
     try {
       // Get the actual swap amount for this token
       const actualSwapAmount = swapAmounts[token.address]?.amount || 0;
       let approvalAmount;
       
-      // Parse the maxApprovalUsd input
-      const maxUsdAmount = parseFloat(maxApprovalUsd);
+      // Parse the approval USD amount - use custom amount if provided, otherwise use maxApprovalUsd
+      const approvalUsdInput = customUsdAmount !== null ? customUsdAmount : maxApprovalUsd;
+      const maxUsdAmount = parseFloat(approvalUsdInput);
       
-      // First, determine if we should use the actual swap amount or the maxApprovalUsd
+      console.log(`Approving ${token.symbol} for $${maxUsdAmount}`);
+      
       if (isNaN(maxUsdAmount) || maxUsdAmount <= 0) {
         // If USD amount is invalid, fall back to using the actual swap amount or token balance
         const currentAmount = actualSwapAmount > 0 ? actualSwapAmount : token.balance;
@@ -400,27 +377,17 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
         );
         console.log(`Using current amount for approval: ${currentAmount} ${token.symbol}`);
       } else if (token.priceUsd && token.priceUsd > 0) {
-        let tokenAmount;
+        // Calculate how many tokens are worth maxUsdAmount with proper precision
+        const rawAmount = maxUsdAmount / token.priceUsd;
         
-        if (token.priceUsd < 0.0000001) {
-          // For extremely low value tokens, use a fixed reasonable amount
-          tokenAmount = "1000000"; // 1 million tokens
-          console.log(`Price too small for ${token.symbol}, approving fixed amount of ${tokenAmount} tokens`);
-        } else {
-          // Calculate how many tokens are worth maxUsdAmount with proper precision
-          const rawAmount = maxUsdAmount / token.priceUsd;
-          // Cap the amount to prevent overflow errors
-          const cappedAmount = Math.min(rawAmount, 1000000000000);
-          // Format with appropriate precision to avoid errors
-          tokenAmount = cappedAmount.toFixed(6);
-          console.log(`Approving $${maxUsdAmount} worth of ${token.symbol} (${tokenAmount} tokens)`);
-          
-          // Compare with actual swap amount (if available) and use the larger of the two
-          if (actualSwapAmount > 0 && actualSwapAmount > parseFloat(tokenAmount)) {
-            tokenAmount = actualSwapAmount.toString();
-            console.log(`Using actual swap amount instead: ${tokenAmount} ${token.symbol}`);
-          }
-        }
+        // Cap the amount to prevent overflow errors
+        const cappedAmount = Math.min(rawAmount, 1000000000000);
+        
+        // Format with appropriate precision to avoid errors
+        const tokenAmount = cappedAmount.toFixed(6);
+        console.log(`Approving $${maxUsdAmount} worth of ${token.symbol} (${tokenAmount} tokens)`);
+        
+        // IMPORTANT: Only approve exactly what was requested, don't auto-adjust to the swap amount
         
         // Convert to wei with proper decimals
         approvalAmount = ethers.utils.parseUnits(
@@ -442,9 +409,10 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
         ...prev,
         [token.address]: {
           ...prev[token.address],
-          checking: true,
+          checking: false,
           approving: true,
-          error: null
+          error: null,
+          approvingAmount: false // Close the approval input UI
         }
       }));
       
@@ -511,6 +479,7 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
           checking: false,
           approving: false,
           revoking: true,
+          revokingApproval: false, // Close the revoke confirmation UI
           error: null
         }
       }));
@@ -634,6 +603,35 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
     }
   };
   
+  // Helper function to check if token's approval is sufficient for swap amount
+  const isApprovalSufficient = (token) => {
+    if (!token) return false;
+    
+    if (token.isNative || token.address === 'native' || token.symbol === 'BERA') {
+      return true; // Native tokens always approved
+    }
+    
+    const status = approvalStatus[token.address];
+    if (!status) return false;
+    
+    // If checking/approving/revoking, can't determine
+    if (status.checking || status.approving || status.revoking) return false;
+    
+    // Get current swap amount USD value
+    const swapData = swapAmounts[token.address];
+    if (!swapData || !swapData.isValid) return true; // No valid amount to swap
+    
+    const swapUsdValue = swapData.valueUsd || 0;
+    
+    // Check if approved amount is sufficient
+    if (status.approvalUsdValue) {
+      const approvedUsdValue = parseFloat(status.approvalUsdValue);
+      return approvedUsdValue >= swapUsdValue;
+    }
+    
+    return !!status.isApproved; // Fall back to boolean approval status
+  };
+  
   // Handle swap button click
   const handleSwap = () => {
     if (!isValid) {
@@ -641,30 +639,25 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
       return;
     }
     
-    // Check if all tokens are approved - only using the UI approval status
-    // without additional rechecks or calculations
-    const validTokenAddresses = selectedTokens
+    // Check if all tokens with valid swap amounts have sufficient approvals
+    const tokensWithInsufficientApproval = selectedTokens
       .filter(token => 
         !(token.isNative || token.address === 'native' || token.symbol === 'BERA') &&
-        swapAmounts[token.address]?.isValid
-      )
-      .map(token => token.address);
-    
-    // Simple check based only on UI approval status - if it's marked as approved in the UI,
-    // we trust that and don't do any additional runtime checks or calculations
-    const needsApproval = validTokenAddresses.some(address => 
-      !approvalStatus[address]?.isApproved && swapAmounts[address]?.isValid
-    );
+        swapAmounts[token.address]?.isValid &&
+        !isApprovalSufficient(token)
+      );
     
     // Log approval status for debugging
     console.log("Approval status check on swap execution:");
-    validTokenAddresses.forEach(address => {
-      const token = selectedTokens.find(t => t.address === address);
-      console.log(`Token ${token?.symbol || address}: approved=${!!approvalStatus[address]?.isApproved}`);
-    });
+    selectedTokens
+      .filter(token => swapAmounts[token.address]?.isValid)
+      .forEach(token => {
+        console.log(`Token ${token.symbol}: approved=${isApprovalSufficient(token)}`);
+      });
     
-    if (needsApproval) {
-      setError('Some tokens need approval before swapping. Please approve them first.');
+    if (tokensWithInsufficientApproval.length > 0) {
+      const tokenSymbols = tokensWithInsufficientApproval.map(t => t.symbol).join(', ');
+      setError(`Insufficient approval for: ${tokenSymbols}. Please adjust approvals or swap amounts.`);
       return;
     }
 
@@ -717,7 +710,7 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
   }
 
   return (
-    <div className="cli-overlay-terminal" style={{ maxWidth: '800px', width: '95%' }}>
+    <div className="cli-overlay-terminal" style={{ maxWidth: '840px', width: '98%' }}>
       <div className="cli-overlay-header">
         <div className="cli-overlay-title">
           <span className="cli-prompt">berabundle$</span> <span className="cli-overlay-command">swap --tokens {validTokens.length}</span>
@@ -726,86 +719,36 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
       </div>
 
       <div className="cli-overlay-content">
-        <div className="swap-instruction" style={{ marginBottom: '12px', color: '#aaa', textAlign: 'left' }}>
-          # Enter amount for each token you want to swap
-        </div>
-        
         <div className="swap-instruction" style={{ marginBottom: '20px', color: '#aaa', textAlign: 'left' }}>
-          # Set approval to max $ 
-          <input 
-            type="text" 
-            placeholder="50"
-            value={maxApprovalUsd}
-            style={{
-              background: '#333',
-              color: '#fff',
-              border: '1px solid #666',
-              borderRadius: '3px',
-              padding: '2px 6px',
-              width: '60px',
-              margin: '0 5px',
-              fontFamily: 'monospace'
-            }}
-            onChange={(e) => {
-              // Only update the state, but don't trigger approval checks yet
-              setMaxApprovalUsd(e.target.value);
-            }}
-            onBlur={() => {
-              // Only check approvals when the field is blurred (clicked out of)
-              console.log("Checking approvals on blur with value:", maxApprovalUsd);
-              
-              // Get all non-native tokens to recheck
-              const nonNativeTokens = selectedTokens.filter(token => 
-                !(token.isNative || token.address === 'native' || token.symbol === 'BERA')
-              );
-              
-              // Force a recheck of approvals with new dollar amount
-              checkTokenApprovals(nonNativeTokens);
-            }}
-          /> 
-          amount of each token
+          # Enter amount for each token you want to swap
         </div>
 
         <div className="cli-table" style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-          {/* Table header row styled like the main token list */}
-          <div className="cli-table-header" style={{ width: '100%', display: 'flex' }}>
-            <div className="cli-header-cell token-symbol" style={{ flex: '0 0 12%' }}>
-              TOKEN
-            </div>
-            <div className="cli-header-cell token-balance" style={{ flex: '0 0 38%', textAlign: 'center' }}>
-              AMOUNT
-            </div>
-            <div className="cli-header-cell token-value" style={{ flex: '0 0 10%' }}>
-              VALUE
-            </div>
-            <div className="cli-header-cell token-approval" style={{ flex: '0 0 40%', textAlign: 'left' }}>
-              APPROVED
-            </div>
+          {/* Table header row with enhanced layout - added approved amount column */}
+          <div className="cli-table-header">
+            <div className="cli-header-cell token-symbol" style={{textAlign: 'center'}}>TOKEN</div>
+            <div className="cli-header-cell token-balance" style={{textAlign: 'center'}}>AMOUNT</div>
+            <div className="cli-header-cell token-value" style={{textAlign: 'center'}}>VALUE</div>
+            <div className="cli-header-cell token-approved" style={{textAlign: 'center'}}>APPROVED</div>
+            <div className="cli-header-cell token-actions" style={{textAlign: 'center'}}>ACTIONS</div>
           </div>
           
           {validTokens.map(token => (
             <div 
               key={token.address} 
               className={`cli-row ${swapAmounts[token.address]?.isValid ? 'selected' : ''}`}
-              style={{ width: '100%', display: 'flex' }}
             >
-              <div className="cli-cell token-symbol" style={{ flex: '0 0 12%' }}>
+              <div className="cli-cell token-symbol">
                 {token.symbol}
               </div>
               
-              <div className="cli-cell token-balance" style={{ flex: '0 0 38%', textAlign: 'center' }}>
+              <div className="cli-cell token-balance">
                 <input
                   type="text"
                   value={swapAmounts[token.address]?.rawInput || ''}
                   onChange={(e) => handleAmountChange(token, e.target.value, false)}
-                  onBlur={(e) => {
-                    // Only run approval check when the field loses focus
-                    if (swapAmounts[token.address]?.isValid) {
-                      console.log(`Amount field for ${token.symbol} lost focus, checking approval status`);
-                      // Check just this token
-                      checkTokenApprovals([token]);
-                    }
-                  }}
+                  // No longer checking approval on blur
+                  onBlur={(e) => {}}
                   className={`cli-amount-input ${swapAmounts[token.address]?.isValid ? 'valid' : ''}`}
                 />
                 <div style={{ display: 'inline-flex', whiteSpace: 'nowrap' }}>
@@ -824,75 +767,186 @@ function SwapForm({ selectedTokens, beraToken, onClose, onSwap }) {
                 </div>
               </div>
               
-              <div className="cli-cell token-value" style={{ flex: '0 0 10%' }}>
+              <div className="cli-cell token-value amount-cell">
                 {swapAmounts[token.address]?.isValid && swapAmounts[token.address]?.valueUsd > 0 
                   ? `$${swapAmounts[token.address].valueUsd.toFixed(2)}`
                   : '-'
                 }
               </div>
               
-              <div className="cli-cell token-approval" style={{ flex: '0 0 40%', textAlign: 'left' }}>
+              {/* Approved Amount Column */}
+              <div className="cli-cell token-approved approved-amount">
                 {/* For BERA or native token, no approval needed */}
                 {token.isNative || token.address === 'native' || token.symbol === 'BERA' ? (
-                  <span style={{ color: '#55bb55' }}>✓ yes</span>
-                ) : approvalStatus[token.address] ? (
+                  <span style={{ color: '#55bb55' }}>✓ Native</span>
+                ) : approvalStatus[token.address]?.checking ? (
+                  <span style={{ color: '#888' }}>Checking...</span>
+                ) : approvalStatus[token.address]?.approving ? (
+                  <span style={{ color: '#888' }}>Approving...</span>
+                ) : approvalStatus[token.address]?.revoking ? (
+                  <span style={{ color: '#888' }}>Revoking...</span>
+                ) : (
+                  <span style={{
+                    color: isApprovalSufficient(token) ? '#55bb55' : '#ff6666'
+                  }}>
+                    {approvalStatus[token.address]?.approvalUsdValue ? 
+                      `$${approvalStatus[token.address].approvalUsdValue}` : 
+                      (approvalStatus[token.address]?.isApproved ? '✓ Approved' : '⨯ Not approved')}
+                  </span>
+                )}
+              </div>
+              
+              {/* Approval Actions Column */}
+              <div className="cli-cell token-actions">
+                {/* For BERA or native token, no approval actions needed */}
+                {!(token.isNative || token.address === 'native' || token.symbol === 'BERA') && 
+                 approvalStatus[token.address] && 
+                 !approvalStatus[token.address].checking && 
+                 !approvalStatus[token.address].approving && 
+                 !approvalStatus[token.address].revoking && (
                   <>
-                    {approvalStatus[token.address].checking ? (
-                      <span style={{ color: '#888' }}>checking...</span>
-                    ) : approvalStatus[token.address].approving ? (
-                      <span style={{ color: '#888' }}>approving...</span>
-                    ) : approvalStatus[token.address].revoking ? (
-                      <span style={{ color: '#888' }}>revoking...</span>
-                    ) : approvalStatus[token.address].isApproved ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ color: '#55bb55', display: 'flex', flexDirection: 'column' }}>
-                          <span>✓ yes</span>
-                          {approvalStatus[token.address].approvalUsdValue && 
-                            <span style={{ fontSize: '0.8rem' }}>limit: ${approvalStatus[token.address].approvalUsdValue}</span>
-                          }
-                        </span>
-                        <a 
-                          href="#"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            handleRevokeToken(token);
-                          }}
-                          style={{
-                            color: '#ff6666',
-                            fontSize: '0.8rem',
-                            textDecoration: 'none'
+                    {/* Standard Approval Action Buttons */}
+                    {!approvalStatus[token.address].approvingAmount && 
+                     !approvalStatus[token.address].revokingApproval && (
+                      <div className="approval-actions">
+                        <button 
+                          className="approval-action-btn approve"
+                          onClick={() => {
+                            // Track approval amount input mode
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                approvingAmount: true,
+                                approvalAmountInput: maxApprovalUsd || "50"
+                              }
+                            }));
                           }}
                         >
-                          revoke
-                        </a>
+                          Approve More
+                        </button>
+                        
+                        <button
+                          className="approval-action-btn revoke"
+                          onClick={() => {
+                            // Track revocation input mode
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                revokingApproval: true
+                              }
+                            }));
+                          }}
+                        >
+                          Revoke
+                        </button>
                       </div>
-                    ) : (
-                      <button 
-                        className="cli-approve-btn"
-                        onClick={() => handleApproveToken(token)}
-                        disabled={!swapAmounts[token.address]?.isValid}
-                        style={{
-                          padding: '2px 6px',
-                          marginLeft: '2px',
-                          background: '#444',
-                          color: '#55bb55',
-                          border: '1px solid #666',
-                          borderRadius: '3px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        approve
-                      </button>
                     )}
                     
+                    {/* Approval Amount Input */}
+                    {approvalStatus[token.address].approvingAmount && (
+                      <div className="approval-input-container">
+                        <span className="approval-symbol">$</span>
+                        <input
+                          type="text"
+                          className="approval-input"
+                          value={approvalStatus[token.address].approvalAmountInput || "50"}
+                          onChange={(e) => {
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                approvalAmountInput: e.target.value
+                              }
+                            }));
+                          }}
+                        />
+                        <button
+                          className="approval-confirm"
+                          onClick={() => {
+                            // Use the entered amount for approval
+                            handleApproveToken(token, approvalStatus[token.address].approvalAmountInput);
+                            
+                            // Exit approval input mode
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                approvingAmount: false
+                              }
+                            }));
+                          }}
+                        >
+                          Ok
+                        </button>
+                        <button
+                          className="approval-action-btn"
+                          onClick={() => {
+                            // Cancel approval input
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                approvingAmount: false
+                              }
+                            }));
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* Revoke Confirmation */}
+                    {approvalStatus[token.address].revokingApproval && (
+                      <div className="approval-input-container">
+                        <span style={{ fontSize: '0.8rem', color: '#ff6666' }}>
+                          Confirm:
+                        </span>
+                        <button
+                          className="approval-confirm revoke"
+                          onClick={() => {
+                            // Revoke approval
+                            handleRevokeToken(token);
+                            
+                            // Exit revoke mode
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                revokingApproval: false
+                              }
+                            }));
+                          }}
+                        >
+                          Revoke
+                        </button>
+                        <button
+                          className="approval-action-btn"
+                          onClick={() => {
+                            // Cancel revocation
+                            setApprovalStatus(prev => ({
+                              ...prev,
+                              [token.address]: {
+                                ...prev[token.address],
+                                revokingApproval: false
+                              }
+                            }));
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                  
+                    {/* Error Message */}
                     {approvalStatus[token.address].error && (
                       <div style={{ color: '#dd5555', fontSize: '0.8rem', marginTop: '4px' }}>
                         Error: {approvalStatus[token.address].error.substring(0, 40)}...
                       </div>
                     )}
                   </>
-                ) : (
-                  <span style={{ color: '#888' }}>checking...</span>
                 )}
               </div>
             </div>

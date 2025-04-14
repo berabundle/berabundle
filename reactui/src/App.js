@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import './App.css';
 import CliTokenList from './components/CliTokenList';
-import CliRewardsList from './components/CliRewardsList';
-import CliValidatorBoosts from './components/CliValidatorBoosts';
+import RewardsAndBoostsPanel from './components/RewardsAndBoostsPanel';
 import ApiKeyInput from './components/ApiKeyInput';
 import MetadataManager from './components/MetadataManager';
 import SwapForm from './components/SwapForm';
@@ -102,6 +101,7 @@ function App() {
       // Initialize services with provider, signer and API key
       const tokenBridgeInitialized = tokenBridge.initialize(provider, apiKey, signer);
       const rewardsServiceInitialized = rewardsService.initialize(provider, apiKey);
+      const metadataInitialized = metadataService.initialize({ apiKey });
       
       if (!tokenBridgeInitialized) {
         console.error("Failed to initialize token bridge");
@@ -109,6 +109,10 @@ function App() {
       
       if (!rewardsServiceInitialized) {
         console.error("Failed to initialize rewards service");
+      }
+      
+      if (!metadataInitialized) {
+        console.error("Failed to initialize metadata service");
       }
     }
   }, [provider, apiKey, account]); // Added account dependency to reinitialize when account changes
@@ -122,6 +126,7 @@ function App() {
       const signer = provider.getSigner();
       tokenBridge.initialize(provider, newApiKey, signer);
       rewardsService.initialize(provider, newApiKey);
+      metadataService.initialize({ apiKey: newApiKey });
     }
   };
   
@@ -586,9 +591,13 @@ function App() {
     }
   };
   
-  // Load token balances from the wallet using GitHub and OogaBooga metadata
+  // Load token balances from the backend API
   async function loadTokenBalances() {
-    if (!account || !tokenBridge.isInitialized()) return;
+    if (!account || !tokenBridge.isInitialized()) {
+      console.error("[App] Cannot load balances - account or tokenBridge not initialized", 
+        { hasAccount: !!account, tokenBridgeInitialized: tokenBridge.isInitialized() });
+      return;
+    }
     
     // Clear rewards when loading tokens (mutual exclusivity)
     setRewards([]);
@@ -600,186 +609,51 @@ function App() {
     setShowSwapForm(false);
     
     try {
-      // Get the GitHub or OogaBooga tokens
-      let tokenList = [];
-      let tokensMap = {};
+      console.log("[App] Loading token balances from backend API for account:", account);
       
-      // First try to get the OogaBooga tokens (preferred, as they have more data)
-      const oogaboogaTokensResult = await metadataService.getOogaBoogaTokens();
+      // Get all token balances at once from the backend
+      const allBalancesResult = await tokenBridge.getAllBalances(account);
       
-      if (oogaboogaTokensResult.success && oogaboogaTokensResult.tokens && oogaboogaTokensResult.tokens.data) {
-        tokensMap = oogaboogaTokensResult.tokens.data;
-        console.log(`Using OogaBooga tokens (${Object.keys(tokensMap).length} tokens)`);
-      } else {
-        // Fallback to GitHub tokens
-        const githubTokensResult = await metadataService.getGitHubTokens();
-        
-        if (githubTokensResult.success && githubTokensResult.tokens && githubTokensResult.tokens.data) {
-          // Convert GitHub token array to map for easier lookup
-          const githubTokens = githubTokensResult.tokens.data;
-          githubTokens.forEach(token => {
-            tokensMap[token.address.toLowerCase()] = token;
-          });
-          console.log(`Using GitHub tokens (${Object.keys(tokensMap).length} tokens)`);
-        } else {
-          console.log('No tokens available from GitHub or OogaBooga');
-          setTokenError("Failed to load token data. Please update metadata.");
-          setLoadingTokens(false);
-          return;
-        }
+      console.log("[App] Full balance result from backend:", allBalancesResult);
+      
+      if (!allBalancesResult || !allBalancesResult.success) {
+        console.error("[App] Failed to get token balances:", allBalancesResult);
+        throw new Error(allBalancesResult?.error || "Failed to get token balances from backend");
       }
       
-      // Get native BERA balance
-      const beraBalance = await provider.getBalance(account);
-      const formattedBeraBalance = ethers.utils.formatEther(beraBalance);
+      // Extract the data
+      const tokens = allBalancesResult.tokens || [];
+      const nativeToken = allBalancesResult.native;
       
-      // Convert to array and filter out native tokens (we'll add them separately)
-      const tokensList = Object.values(tokensMap).filter(token => 
-        token.address !== "0x0000000000000000000000000000000000000000" && 
-        token.symbol !== "BERA"
-      );
-      
-      // Process tokens in batches to prevent too many concurrent requests
-      const batch = 15;
-      const tokens = [];
-      
-      // Show incremental progress
-      let processedCount = 0;
-      const totalCount = tokensList.length;
-      
-      for (let i = 0; i < tokensList.length; i += batch) {
-        const batchTokens = tokensList.slice(i, i + batch);
-        
-        // Get balances for each token in parallel
-        const batchResults = await Promise.all(batchTokens.map(async token => {
-          try {
-            // Create an ERC20 contract interface for the token
-            const tokenContract = new ethers.Contract(
-              token.address,
-              ["function balanceOf(address) view returns (uint256)"],
-              provider
-            );
-            
-            // Get the raw balance
-            const rawBalance = await tokenContract.balanceOf(account);
-            const balance = ethers.utils.formatUnits(rawBalance, token.decimals || 18);
-            
-            // Track progress
-            processedCount++;
-            
-            // Only return tokens with non-zero balance
-            if (parseFloat(balance) > 0) {
-              return {
-                ...token,
-                balance,
-                formattedBalance: parseFloat(balance).toLocaleString(undefined, {
-                  minimumFractionDigits: 0,
-                  maximumFractionDigits: 6
-                }),
-                priceUsd: null,
-                valueUsd: 0,
-                formattedValueUsd: "$0.00"
-              };
-            }
-            return null;
-          } catch (error) {
-            processedCount++;
-            console.error(`Error checking balance for ${token.symbol || token.address}:`, error);
-            return null;
-          }
-        }));
-        
-        // Filter out null values (tokens with zero balance)
-        tokens.push(...batchResults.filter(t => t !== null));
-      }
-      
-      // Fetch prices in parallel for all tokens with balances including BERA
-      const tokenAddresses = tokens.map(token => token.address);
-      const priceFetchPromises = [...tokenAddresses, 'BERA'].map(address => 
-        tokenBridge.getTokenPrice(address)
-          .then(price => ({ address, price }))
-          .catch(error => {
-            console.error(`Error fetching price for ${address}:`, error);
-            return { address, price: null };
-          })
-      );
-      
-      // Wait for all price fetches to complete
-      const priceResults = await Promise.all(priceFetchPromises);
-      
-      // Create a price lookup map
-      const priceMap = {};
-      priceResults.forEach(result => {
-        priceMap[result.address] = result.price;
-      });
-      
-      // Get BERA price from the results
-      let beraPrice = priceMap['BERA'];
-      
-      // Update token objects with price data
-      tokens.forEach(token => {
-        const price = priceMap[token.address];
-        if (price !== null) {
-          token.priceUsd = price;
-          token.valueUsd = parseFloat(token.balance) * price;
-          token.formattedValueUsd = token.valueUsd.toLocaleString(undefined, {
-            style: 'currency',
-            currency: 'USD',
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-          });
-        }
-      });
-      
-      const beraValueUsd = beraPrice ? parseFloat(formattedBeraBalance) * beraPrice : 0;
-      
-      // Create BERA token object
-      const beraTokenObj = {
-        name: 'BERA',
-        symbol: 'BERA',
-        address: 'native',
-        decimals: 18,
-        balance: formattedBeraBalance,
-        formattedBalance: parseFloat(formattedBeraBalance).toLocaleString(undefined, {
-          minimumFractionDigits: 0,
-          maximumFractionDigits: 6
-        }),
-        priceUsd: beraPrice,
-        valueUsd: beraValueUsd,
-        formattedValueUsd: beraValueUsd.toLocaleString(undefined, {
-          style: 'currency',
-          currency: 'USD',
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2
-        }),
-        isNative: true
-      };
-      
-      // Add BERA to token list at the beginning
-      tokens.unshift(beraTokenObj);
+      console.log(`[App] Received ${tokens.length} tokens with balances from backend`);
+      console.log("[App] Native token:", nativeToken);
+      console.log("[App] First few tokens:", tokens.slice(0, 3));
       
       // Set BERA token for swap calculations
-      setBeraToken(beraTokenObj);
+      setBeraToken(nativeToken);
       
-      // Calculate total value in USD and BERA
-      const totalValueUsd = tokens.reduce((sum, token) => sum + (token.valueUsd || 0), 0);
-      const totalValueBera = beraPrice ? totalValueUsd / beraPrice : 0;
+      // Add BERA to token list at the beginning
+      const allTokens = nativeToken ? [nativeToken, ...tokens] : [...tokens];
+      
+      console.log("[App] Setting tokens state with", allTokens.length, "tokens");
       
       // Update state
-      setTokens(tokens);
-      setTotalValueUsd(totalValueUsd.toLocaleString(undefined, {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }));
-      setTotalValueBera(`${totalValueBera.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 6
-      })} BERA`);
+      setTokens(allTokens);
+      setTotalValueUsd(allBalancesResult.formattedTotalValueUsd || "$0.00");
+      
+      // Calculate total value in BERA if we have a BERA price
+      if (nativeToken?.priceUsd && nativeToken.priceUsd > 0) {
+        const totalValueBera = allBalancesResult.totalValueUsd / nativeToken.priceUsd;
+        setTotalValueBera(`${totalValueBera.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 6
+        })} BERA`);
+      } else {
+        setTotalValueBera("N/A");
+      }
       
     } catch (err) {
-      console.error("Error loading token balances:", err);
+      console.error("[App] Error loading token balances:", err);
       setTokenError(err.message || "Failed to load token balances");
     } finally {
       setLoadingTokens(false);
@@ -967,20 +841,10 @@ function App() {
                   {(loadingRewards || rewards.length > 0 || rewardsError || loadingBoosts || 
                     validatorBoosts.activeBoosts.length > 0 || validatorBoosts.queuedBoosts.length > 0 || boostsError) ? (
                     <div className="cli-terminal-container cli-rewards-column" style={{ maxWidth: '100%', margin: '10px auto 0' }}>
-                      <CliRewardsList 
-                        rewards={rewards}
-                        loading={loadingRewards}
-                        error={rewardsError}
-                        onClaimSelected={handleRewardSelect}
+                      <RewardsAndBoostsPanel
+                        walletAddress={account}
+                        provider={provider}
                       />
-                      
-                      <div style={{ marginTop: '15px' }}>
-                        <CliValidatorBoosts 
-                          validatorBoosts={validatorBoosts}
-                          loading={loadingBoosts}
-                          error={boostsError}
-                        />
-                      </div>
                     </div>
                   ) : null}
                 </div>

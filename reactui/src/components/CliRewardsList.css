@@ -238,3 +238,81 @@
 @keyframes cli-spin {
   to { transform: rotate(360deg); }
 }
+
+/* Tabs for the integrated rewards panel */
+.cli-tabs {
+  display: flex;
+  background-color: #222;
+  border-bottom: 1px solid #444;
+  padding: 0;
+  font-family: 'Courier New', monospace;
+}
+
+.cli-tab {
+  padding: 12px 15px;
+  cursor: pointer;
+  border-right: 1px solid #444;
+  transition: background-color 0.2s;
+}
+
+.cli-tab:hover {
+  background-color: #2a2a2a;
+}
+
+.cli-tab.active {
+  background-color: #2a2a2a;
+  border-bottom: 2px solid #ffc045;
+}
+
+.cli-tab-actions {
+  margin-left: auto;
+  padding: 8px 15px;
+  display: flex;
+  align-items: center;
+}
+
+.cli-tab-content {
+  padding: 0;
+}
+
+.cli-command-row {
+  padding: 15px;
+  background-color: #1e1e1e;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid #444;
+}
+
+.cli-btn {
+  background-color: #333;
+  color: #f0f0f0;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-left: 10px;
+  cursor: pointer;
+  font-family: 'Courier New', monospace;
+  transition: background-color 0.2s;
+}
+
+.cli-btn:hover {
+  background-color: #444;
+}
+
+.cli-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cli-btn-claim {
+  background-color: #775500;
+  border-color: #ffc045;
+}
+
+.cli-btn-claim:hover {
+  background-color: #886600;
+}
+
+.claim-row {
+  justify-content: flex-start;
+}

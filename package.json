@@ -4,7 +4,9 @@
   "description": "BeraBundle - Bundle creator for claims, boosts, and swaps on Berachain",
   "main": "config.js",
   "scripts": {
-    "start-ui": "cd reactui && npm start"
+    "start-ui": "cd reactui && npm start",
+    "start-backend": "node backend/server.js",
+    "start": "node backend/server.js & cd reactui && npm start"
   },
   "keywords": [
     "berachain",
@@ -17,6 +19,9 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^1.6.7",
-    "ethers": "^5.7.2"
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ethers": "^5.7.2",
+    "express": "^5.1.0"
   }
 }

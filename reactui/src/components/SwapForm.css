@@ -106,6 +106,7 @@
 .token-symbol {
   font-weight: bold;
   color: white;
+  text-align: center;
 }
 
 .token-balance {
@@ -245,4 +246,169 @@
   margin-right: 5px;
   font-family: monospace;
   display: inline-block;
+}
+
+/* Enhanced approval styles */
+.approval-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.approval-actions button {
+  width: 100%;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+.approval-action-btn {
+  background-color: #333;
+  border: 1px solid #666;
+  color: #ccc;
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin: 0 2px;
+  text-align: center;
+}
+
+.approval-action-btn:hover {
+  background-color: #444;
+}
+
+.approval-action-btn.approve {
+  color: #55bb55;
+  border-color: #55bb55;
+}
+
+.approval-action-btn.approve:hover {
+  background-color: rgba(85, 187, 85, 0.1);
+}
+
+.approval-action-btn.revoke {
+  color: #ff6666;
+  border-color: #ff6666;
+}
+
+.approval-action-btn.revoke:hover {
+  background-color: rgba(255, 102, 102, 0.1);
+}
+
+.approval-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.approval-limit {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.approval-input-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.approval-input {
+  background-color: #333;
+  border: 1px solid #666;
+  color: #ccc;
+  border-radius: 3px;
+  padding: 2px 6px;
+  width: 60px;
+  font-size: 0.8rem;
+}
+
+.approval-symbol {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.approval-confirm {
+  background-color: #333;
+  border: 1px solid #55bb55;
+  color: #55bb55;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.approval-confirm:hover {
+  background-color: rgba(85, 187, 85, 0.1);
+}
+
+.approval-confirm.revoke {
+  border-color: #ff6666;
+  color: #ff6666;
+}
+
+.approval-confirm.revoke:hover {
+  background-color: rgba(255, 102, 102, 0.1);
+}
+
+/* Table layout updates */
+.cli-table {
+  width: 100%;
+  padding: 0 20px;
+}
+
+.cli-table-header {
+  display: grid;
+  grid-template-columns: 80px minmax(100px, 0.7fr) 100px 100px 120px;
+  padding: 6px 0;
+  border-bottom: 1px solid #444;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.cli-row {
+  display: grid;
+  grid-template-columns: 80px minmax(100px, 0.7fr) 100px 100px 120px;
+  padding: 8px 0;
+  border-bottom: 1px solid #333;
+  align-items: center;
+}
+
+.cli-header-cell {
+  color: #888;
+  font-weight: bold;
+  text-align: center;
+}
+
+.cli-cell {
+  padding: 2px 0;
+}
+
+.cli-cell.token-symbol,
+.cli-cell.token-value,
+.cli-cell.token-approved {
+  text-align: center;
+}
+
+.amount-cell {
+  color: #ccc;
+  font-family: monospace;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.approved-amount {
+  color: #55bb55;
+  font-family: monospace;
+  font-size: 0.9rem;
+  text-align: center;
 }
